@@ -818,8 +818,8 @@ mod tests {
     fn real_map() -> Result<(), Box<dyn std::error::Error>> {
         let path = "benchmarks/BigGameHunters.map";
         let pathable = test_helpers::load_map(path)?;
-        let cluster_size = 8;
-        let entrance_width_breakpoint = 5;
+        let cluster_size = 16;
+        let entrance_width_breakpoint = 8;
         let mut nav = HPAStar::new(
             NavigabilityMask::from_row_major_vec(pathable.clone()),
             cluster_size,
