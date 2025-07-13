@@ -316,7 +316,23 @@ impl HPAStar {
         self.remove_temp_transition(start_id);
         self.remove_temp_transition(end_id);
 
-        concrete_path
+        // path smoothing
+        let mut smoothed_path = Vec::new();
+        let mut iter = concrete_path.iter().copied();
+        let mut a = iter.next().unwrap(); // assumes non-empty path
+
+        for b in iter {
+            if self.navigability_mask.visibility_check(a, b) {
+                continue;
+            } else {
+                smoothed_path.push(a);
+                a = b;
+            }
+        }
+
+        smoothed_path.push(*concrete_path.last().unwrap());
+
+        smoothed_path
     }
 
     pub fn add_obstructions(coords: Vec<Coords>) {
@@ -484,7 +500,6 @@ mod test_helpers {
         root.fill(&WHITE).unwrap();
 
         let transition_set: HashSet<_> = transitions.into_iter().collect();
-        let path_set: HashSet<_> = path.into_iter().collect();
 
         for (y, row) in grid.iter().enumerate() {
             for (x, &walkable) in row.iter().enumerate() {
@@ -500,8 +515,6 @@ mod test_helpers {
                     color = BLACK;
                 } else if transition_set.contains(&(x, y)) {
                     color = RGBColor(150, 180, 210); // light blue
-                } else if path_set.contains(&(x, y)) {
-                    color = RED;
                 }
 
                 root.draw(&Rectangle::new(
@@ -510,6 +523,22 @@ mod test_helpers {
                 ))
                 .unwrap();
             }
+        }
+
+        // Draw path as connected lines
+        let path_style = ShapeStyle::from(&RED).stroke_width(2);
+        for window in path.windows(2) {
+            let (x0, y0) = window[0];
+            let (x1, y1) = window[1];
+
+            // Center of each grid cell
+            let cx0 = (x0 * pixel_size + pixel_size / 2) as i32;
+            let cy0 = (y0 * pixel_size + pixel_size / 2) as i32;
+            let cx1 = (x1 * pixel_size + pixel_size / 2) as i32;
+            let cy1 = (y1 * pixel_size + pixel_size / 2) as i32;
+
+            root.draw(&PathElement::new(vec![(cx0, cy0), (cx1, cy1)], path_style))
+                .unwrap();
         }
 
         // Draw vertical grid lines

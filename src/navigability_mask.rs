@@ -68,4 +68,39 @@ impl NavigabilityMask {
     }
 
     pub fn set_rect(&mut self, top_left: Coords, bot_right: Coords) {}
+
+    // Using Bresenham line drawing algorithm
+    pub fn visibility_check(&self, a: Coords, b: Coords) -> bool {
+        let x0 = a.0 as i32;
+        let y0 = a.1 as i32;
+        let x1 = b.0 as i32;
+        let y1 = b.1 as i32;
+
+        let dx = (x1 - x0).abs();
+        let dy = -(y1 - y0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        let mut x = x0;
+        let mut y = y0;
+
+        loop {
+            if x < 0 || y < 0 || !self.is_navigable((x as u32, y as u32)) {
+                return false;
+            }
+            if x == x1 && y == y1 {
+                return true;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
 }
