@@ -1,6 +1,7 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
+    f32::consts::SQRT_2,
 };
 
 use ordered_float::OrderedFloat;
@@ -46,14 +47,15 @@ pub fn astar(
             return Some(reconstruct_path(&came_from, current));
         }
 
-        for neighbor in navigability_mask.get_navigable_neighbors(
+        for (neighbor, is_diag) in navigability_mask.get_navigable_neighbors(
             current,
             min_x as usize,
             max_x as usize,
             min_y as usize,
             max_y as usize,
         ) {
-            let tentative_g_score = *g_score.get(&current).unwrap() + 1f32;
+            let tentative_g_score =
+                *g_score.get(&current).unwrap() + if is_diag { SQRT_2 } else { 1f32 };
             if tentative_g_score < *g_score.get(&neighbor).unwrap_or(&f32::INFINITY) {
                 came_from.insert(neighbor, current);
                 g_score.insert(neighbor, tentative_g_score);

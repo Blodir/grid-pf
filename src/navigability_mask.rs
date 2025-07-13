@@ -29,6 +29,7 @@ impl NavigabilityMask {
         self.bitvec.contains(y as usize * self.width + x as usize)
     }
 
+    /// returns (neighbor position, neighbor is diagonal)
     pub fn get_navigable_neighbors<'a>(
         &'a self,
         pos: Coords,
@@ -36,21 +37,21 @@ impl NavigabilityMask {
         max_x: usize,
         min_y: usize,
         max_y: usize,
-    ) -> impl Iterator<Item = Coords> + 'a {
+    ) -> impl Iterator<Item = (Coords, bool)> + 'a {
         let (x, y) = (pos.0 as i32, pos.1 as i32);
 
-        const DELTAS: [(i32, i32); 8] = [
-            (-1, 0),
-            (1, 0),
-            (0, -1),
-            (0, 1),
-            (-1, -1),
-            (1, -1),
-            (-1, 1),
-            (1, 1),
+        const DELTAS: [((i32, i32), bool); 8] = [
+            ((-1, 0), false),
+            ((1, 0), false),
+            ((0, -1), false),
+            ((0, 1), false),
+            ((-1, -1), true),
+            ((1, -1), true),
+            ((-1, 1), true),
+            ((1, 1), true),
         ];
 
-        DELTAS.into_iter().filter_map(move |(dx, dy)| {
+        DELTAS.into_iter().filter_map(move |((dx, dy), is_diag)| {
             let nx = x + dx;
             let ny = y + dy;
 
@@ -58,9 +59,10 @@ impl NavigabilityMask {
             {
                 let p = (nx as u32, ny as u32);
                 if self.is_navigable(p) {
-                    return Some(p);
+                    return Some((p, is_diag));
                 }
             }
+
             None
         })
     }

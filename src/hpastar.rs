@@ -7,9 +7,6 @@ use std::{
     collections::{BinaryHeap, HashMap},
 };
 
-const CLUSTER_SIZE: u32 = 16;
-const ENTRANCE_WIDTH_BREAKPOINT: u32 = 8;
-
 type TransitionId = u64;
 
 fn join_transition_id(tile: Coords) -> TransitionId {
@@ -40,19 +37,25 @@ pub struct HPAStar {
     clusters: Vec<Cluster>, // row-major order
     transitions: HashMap<TransitionId, Transition>,
     width: u32,
+    cluster_size: u32,
+    entrance_width_breakpoint: u32,
 }
 
 impl HPAStar {
-    pub fn new(navigability_mask: NavigabilityMask) -> Self {
+    pub fn new(
+        navigability_mask: NavigabilityMask,
+        cluster_size: u32,
+        entrance_width_breakpoint: u32,
+    ) -> Self {
         let height = navigability_mask.height as u32;
         assert!(
-            height % CLUSTER_SIZE == 0,
+            height % cluster_size == 0,
             "Grid height was not a multiple of cluster size, was: {}",
             height
         );
         let width = navigability_mask.width as u32;
         assert!(
-            width % CLUSTER_SIZE == 0,
+            width % cluster_size == 0,
             "Grid width was not a multiple of cluster size, was: {}",
             width
         );
@@ -61,8 +64,8 @@ impl HPAStar {
         let mut transitions = HashMap::new();
 
         // initialize clusters
-        for _y in 0..(height / CLUSTER_SIZE) {
-            for _x in 0..(width / CLUSTER_SIZE) {
+        for _y in 0..(height / cluster_size) {
+            for _x in 0..(width / cluster_size) {
                 clusters.push(Cluster {
                     transitions: Vec::new(),
                 });
@@ -78,7 +81,7 @@ impl HPAStar {
                     |position,
                      transitions: &mut HashMap<TransitionId, Transition>,
                      clusters: &mut Vec<Cluster>| {
-                        let cluster_idx = HPAStar::locate_cluster(position, width);
+                        let cluster_idx = HPAStar::locate_cluster(position, width, cluster_size);
                         let id = join_transition_id((position.0 as u32, position.1 as u32));
                         if transitions.get(&id).is_none() {
                             let edges = vec![];
@@ -105,16 +108,16 @@ impl HPAStar {
             };
 
         // Iterate over vertical border edges
-        for border_start_y in (0..(height - 1)).step_by(CLUSTER_SIZE as usize) {
+        for border_start_y in (0..(height - 1)).step_by(cluster_size as usize) {
             // x coord of the border on the right side cluster
-            for border_right_x in (CLUSTER_SIZE..(width - 1)).step_by(CLUSTER_SIZE as usize) {
+            for border_right_x in (cluster_size..(width - 1)).step_by(cluster_size as usize) {
                 let border_left_x = border_right_x - 1;
                 let mut entrance_start = border_start_y;
 
                 // walk down the edge
                 // include 1 extra tile that we'll just treat as if it was closed
-                for y in border_start_y..=(border_start_y + CLUSTER_SIZE) {
-                    if y < border_start_y + CLUSTER_SIZE
+                for y in border_start_y..=(border_start_y + cluster_size) {
+                    if y < border_start_y + cluster_size
                         && navigability_mask.is_navigable((border_left_x, y))
                         && navigability_mask.is_navigable((border_right_x, y))
                     {
@@ -126,7 +129,7 @@ impl HPAStar {
                     let first_y = entrance_start;
                     let last_y = y.saturating_sub(1);
                     let entrance_width = y.saturating_sub(first_y);
-                    if entrance_width >= ENTRANCE_WIDTH_BREAKPOINT {
+                    if entrance_width >= entrance_width_breakpoint {
                         let a_pos = (border_left_x, first_y);
                         let b_pos = (border_right_x, first_y);
                         insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
@@ -145,13 +148,13 @@ impl HPAStar {
         }
 
         // Do the same for all horizontal border edges
-        for border_start_x in (0..(width - 1)).step_by(CLUSTER_SIZE as usize) {
-            for border_bottom_y in (CLUSTER_SIZE..(height - 1)).step_by(CLUSTER_SIZE as usize) {
+        for border_start_x in (0..(width - 1)).step_by(cluster_size as usize) {
+            for border_bottom_y in (cluster_size..(height - 1)).step_by(cluster_size as usize) {
                 let border_top_y = border_bottom_y - 1;
                 let mut entrance_start = border_start_x;
 
-                for x in border_start_x..=(border_start_x + CLUSTER_SIZE) {
-                    if x < border_start_x + CLUSTER_SIZE
+                for x in border_start_x..=(border_start_x + cluster_size) {
+                    if x < border_start_x + cluster_size
                         && navigability_mask.is_navigable((x, border_top_y))
                         && navigability_mask.is_navigable((x, border_bottom_y))
                     {
@@ -161,7 +164,7 @@ impl HPAStar {
                     let first_x = entrance_start;
                     let last_x = x.saturating_sub(1);
                     let entrance_width = x.saturating_sub(first_x);
-                    if entrance_width >= ENTRANCE_WIDTH_BREAKPOINT {
+                    if entrance_width >= entrance_width_breakpoint {
                         let a_pos = (first_x, border_top_y);
                         let b_pos = (first_x, border_bottom_y);
                         insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
@@ -191,11 +194,12 @@ impl HPAStar {
                     };
                     let start = t1.position;
                     let goal = t2.position;
-                    let pos = HPAStar::get_cluster_position(cluster_idx as u32, width);
+                    let pos =
+                        HPAStar::get_cluster_position(cluster_idx as u32, width, cluster_size);
                     let min_x = pos.0;
-                    let max_x = pos.0 + CLUSTER_SIZE - 1;
+                    let max_x = pos.0 + cluster_size - 1;
                     let min_y = pos.1;
-                    let max_y = pos.1 + CLUSTER_SIZE - 1;
+                    let max_y = pos.1 + cluster_size - 1;
                     let maybe_path =
                         astar(start, goal, &navigability_mask, min_x, max_x, min_y, max_y);
                     if let Some(path) = maybe_path {
@@ -222,6 +226,8 @@ impl HPAStar {
             clusters,
             transitions,
             width,
+            cluster_size,
+            entrance_width_breakpoint,
         }
     }
 
@@ -334,7 +340,7 @@ impl HPAStar {
         let transition = Transition { edges, position: p };
         self.transitions.insert(id, transition);
 
-        let cluster_idx = HPAStar::locate_cluster(p, self.width) as usize;
+        let cluster_idx = HPAStar::locate_cluster(p, self.width, self.cluster_size) as usize;
         let cluster = &self.clusters[cluster_idx];
         for i in 0..cluster.transitions.len() {
             let [t1, t2] = {
@@ -345,11 +351,12 @@ impl HPAStar {
             };
             let start = t1.position;
             let goal = t2.position;
-            let pos = HPAStar::get_cluster_position(cluster_idx as u32, self.width);
+            let pos =
+                HPAStar::get_cluster_position(cluster_idx as u32, self.width, self.cluster_size);
             let min_x = pos.0;
-            let max_x = pos.0 + CLUSTER_SIZE - 1;
+            let max_x = pos.0 + self.cluster_size - 1;
             let min_y = pos.1;
-            let max_y = pos.1 + CLUSTER_SIZE - 1;
+            let max_y = pos.1 + self.cluster_size - 1;
             let maybe_path = astar(
                 start,
                 goal,
@@ -380,7 +387,7 @@ impl HPAStar {
 
     fn remove_temp_transition(&mut self, removee_id: TransitionId) {
         let removee = self.transitions.get(&removee_id).unwrap();
-        let cluster_idx = HPAStar::locate_cluster(removee.position, self.width);
+        let cluster_idx = HPAStar::locate_cluster(removee.position, self.width, self.cluster_size);
         let cluster_transitions = &self.clusters[cluster_idx as usize].transitions;
         for t_id in cluster_transitions {
             let t = self.transitions.get_mut(t_id).unwrap();
@@ -395,17 +402,17 @@ impl HPAStar {
         self.transitions.remove(&removee_id);
     }
 
-    fn locate_cluster(p: (u32, u32), width: u32) -> u32 {
-        let x = (p.0 as f32 / CLUSTER_SIZE as f32).floor() as u32;
-        let y = (p.1 as f32 / CLUSTER_SIZE as f32).floor() as u32;
-        y * (width / CLUSTER_SIZE) + x
+    fn locate_cluster(p: (u32, u32), width: u32, cluster_size: u32) -> u32 {
+        let x = (p.0 as f32 / cluster_size as f32).floor() as u32;
+        let y = (p.1 as f32 / cluster_size as f32).floor() as u32;
+        y * (width / cluster_size) + x
     }
 
-    fn get_cluster_position(idx: u32, width: u32) -> Coords {
-        let clusters_per_row = width / CLUSTER_SIZE;
+    fn get_cluster_position(idx: u32, width: u32, cluster_size: u32) -> Coords {
+        let clusters_per_row = width / cluster_size;
         let x = idx % clusters_per_row;
         let y = idx / clusters_per_row;
-        (x * CLUSTER_SIZE, y * CLUSTER_SIZE)
+        (x * cluster_size, y * cluster_size)
     }
 }
 
@@ -459,7 +466,12 @@ mod test_helpers {
         Ok(grid)
     }
 
-    pub fn draw_grid(grid: Vec<Vec<bool>>, path: Vec<Coords>, transitions: Vec<Coords>) {
+    pub fn draw_grid(
+        grid: Vec<Vec<bool>>,
+        path: Vec<Coords>,
+        transitions: Vec<Coords>,
+        cluster_size: u32,
+    ) {
         let width = grid[0].len() as u32;
         let height = grid.len() as u32;
         let pixel_size = 4;
@@ -522,7 +534,7 @@ mod test_helpers {
 
         // Cluster grid lines
         let thick_style = ShapeStyle::from(&BLUE).stroke_width(1);
-        for x in (0..=width).step_by(16) {
+        for x in (0..=width).step_by(cluster_size as usize) {
             let xpos = (x * pixel_size) as i32;
             root.draw(&PathElement::new(
                 vec![(xpos, 0), (xpos, img_height as i32)],
@@ -530,7 +542,7 @@ mod test_helpers {
             ))
             .unwrap();
         }
-        for y in (0..=height).step_by(16) {
+        for y in (0..=height).step_by(cluster_size as usize) {
             let ypos = (y * pixel_size) as i32;
             root.draw(&PathElement::new(
                 vec![(0, ypos), (img_width as i32, ypos)],
@@ -578,14 +590,20 @@ mod tests {
     #[test]
     fn one_cluster() {
         let mut pathable = vec![];
-        for _j in 0..CLUSTER_SIZE {
+        let cluster_size = 16;
+        let entrance_width_breakpoint = 8;
+        for _j in 0..cluster_size {
             let mut row = vec![];
-            for _i in 0..CLUSTER_SIZE {
+            for _i in 0..cluster_size {
                 row.push(true);
             }
             pathable.push(row);
         }
-        let nav = HPAStar::new(NavigabilityMask::from_row_major_vec(pathable));
+        let nav = HPAStar::new(
+            NavigabilityMask::from_row_major_vec(pathable),
+            cluster_size,
+            entrance_width_breakpoint,
+        );
         assert!(nav.clusters.len() == 1);
         assert!(nav.transitions.len() == 0);
     }
@@ -593,14 +611,20 @@ mod tests {
     #[test]
     fn two_clusters() {
         let mut pathable = vec![];
-        for _j in 0..CLUSTER_SIZE {
+        let cluster_size = 16;
+        let entrance_width_breakpoint = 8;
+        for _j in 0..cluster_size {
             let mut row = vec![];
-            for _i in 0..CLUSTER_SIZE * 2 {
+            for _i in 0..cluster_size * 2 {
                 row.push(true);
             }
             pathable.push(row);
         }
-        let nav = HPAStar::new(NavigabilityMask::from_row_major_vec(pathable));
+        let nav = HPAStar::new(
+            NavigabilityMask::from_row_major_vec(pathable),
+            cluster_size,
+            entrance_width_breakpoint,
+        );
         assert!(nav.clusters.len() == 2);
         assert!(
             nav.transitions.len() == 4,
@@ -615,14 +639,20 @@ mod tests {
     #[test]
     fn four_clusters() {
         let mut pathable = vec![];
-        for _j in 0..CLUSTER_SIZE * 2 {
+        let cluster_size = 16;
+        let entrance_width_breakpoint = 8;
+        for _j in 0..cluster_size * 2 {
             let mut row = vec![];
-            for _i in 0..CLUSTER_SIZE * 2 {
+            for _i in 0..cluster_size * 2 {
                 row.push(true);
             }
             pathable.push(row);
         }
-        let nav = HPAStar::new(NavigabilityMask::from_row_major_vec(pathable));
+        let nav = HPAStar::new(
+            NavigabilityMask::from_row_major_vec(pathable),
+            cluster_size,
+            entrance_width_breakpoint,
+        );
         assert!(nav.clusters.len() == 4);
         assert!(
             nav.transitions.len() == 12,
@@ -634,35 +664,41 @@ mod tests {
     #[test]
     fn four_clusters_with_obstacles() {
         let mut pathable = vec![];
-        for _j in 0..CLUSTER_SIZE * 2 {
+        let cluster_size = 16;
+        let entrance_width_breakpoint = 8;
+        for _j in 0..cluster_size * 2 {
             let mut row = vec![];
-            for _i in 0..CLUSTER_SIZE * 2 {
+            for _i in 0..cluster_size * 2 {
                 row.push(true);
             }
             pathable.push(row);
         }
 
         // left wall unpathable
-        for y in 0..CLUSTER_SIZE * 2 {
+        for y in 0..cluster_size * 2 {
             pathable[y as usize][0] = false;
         }
 
         // top vertical wall closed
-        for y in 0..CLUSTER_SIZE {
-            pathable[y as usize][CLUSTER_SIZE as usize] = false;
+        for y in 0..cluster_size {
+            pathable[y as usize][cluster_size as usize] = false;
         }
 
         // left horizontal wall semi-closed
-        for x in 4..CLUSTER_SIZE {
-            pathable[CLUSTER_SIZE as usize][x as usize] = false;
+        for x in 4..cluster_size {
+            pathable[cluster_size as usize][x as usize] = false;
         }
 
         // right horizontal wall split
-        for x in CLUSTER_SIZE + 4..CLUSTER_SIZE * 2 - 4 {
-            pathable[CLUSTER_SIZE as usize][x as usize] = false;
+        for x in cluster_size + 4..cluster_size * 2 - 4 {
+            pathable[cluster_size as usize][x as usize] = false;
         }
 
-        let mut nav = HPAStar::new(NavigabilityMask::from_row_major_vec(pathable.clone()));
+        let mut nav = HPAStar::new(
+            NavigabilityMask::from_row_major_vec(pathable.clone()),
+            cluster_size,
+            entrance_width_breakpoint,
+        );
         assert!(
             nav.clusters[0].transitions.len() == 1,
             "Expected 1 transition, was: {}",
@@ -714,7 +750,7 @@ mod tests {
         );
 
         let start: Coords = (5, 5);
-        let end: Coords = (CLUSTER_SIZE + 5, 5);
+        let end: Coords = (cluster_size + 5, 5);
         let hpastar_path = nav.find_path(start, end);
         /* let astar_path = astar::astar(
             start,
@@ -742,6 +778,7 @@ mod tests {
                 .into_iter()
                 .map(|(_id, transition)| transition.position)
                 .collect(),
+            cluster_size,
         );
     }
 
@@ -749,7 +786,13 @@ mod tests {
     #[ignore]
     fn big_grid() {
         let pathable = test_helpers::generate_test_grid();
-        let mut nav = HPAStar::new(NavigabilityMask::from_row_major_vec(pathable.clone()));
+        let cluster_size = 16;
+        let entrance_width_breakpoint = 8;
+        let mut nav = HPAStar::new(
+            NavigabilityMask::from_row_major_vec(pathable.clone()),
+            cluster_size,
+            entrance_width_breakpoint,
+        );
         let start: (u32, u32) = (8, 8);
         let end: (u32, u32) = (500, 500);
         let hpastar_path = nav.find_path(start, end);
@@ -766,6 +809,7 @@ mod tests {
                 .into_iter()
                 .map(|(_id, transition)| transition.position)
                 .collect(),
+            cluster_size,
         );
     }
 
@@ -774,7 +818,13 @@ mod tests {
     fn real_map() -> Result<(), Box<dyn std::error::Error>> {
         let path = "benchmarks/BigGameHunters.map";
         let pathable = test_helpers::load_map(path)?;
-        let mut nav = HPAStar::new(NavigabilityMask::from_row_major_vec(pathable.clone()));
+        let cluster_size = 8;
+        let entrance_width_breakpoint = 5;
+        let mut nav = HPAStar::new(
+            NavigabilityMask::from_row_major_vec(pathable.clone()),
+            cluster_size,
+            entrance_width_breakpoint,
+        );
         let start: (u32, u32) = (20, 16);
         let end: (u32, u32) = (132, 507);
         let hpastar_path = nav.find_path(start, end);
@@ -785,6 +835,7 @@ mod tests {
                 .into_iter()
                 .map(|(_id, transition)| transition.position)
                 .collect(),
+            cluster_size,
         );
         Ok(())
     }
