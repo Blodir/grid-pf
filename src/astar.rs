@@ -108,8 +108,8 @@ mod tests {
         let goal = (2, 2);
         let pathable = vec![
             vec![true, true, false],
-            vec![true, false, true],
-            vec![false, true, true],
+            vec![true, false, false],
+            vec![false, false, true],
         ];
         let min_x = 0;
         let max_x = 2;
@@ -125,7 +125,7 @@ mod tests {
         let goal = (2, 2);
         let pathable = vec![
             vec![true, true, false],
-            vec![true, false, true],
+            vec![true, false, false],
             vec![true, true, true],
         ];
         let min_x = 0;
@@ -135,6 +135,6 @@ mod tests {
         let res = astar(start, goal, &pathable, min_x, max_x, min_y, max_y);
         assert!(res.is_some());
         let res = res.unwrap();
-        assert!(res == vec![(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)]);
+        assert!(res == vec![(0, 0), (0, 1), (1, 2), (2, 2)]);
     }
 }

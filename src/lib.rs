@@ -69,20 +69,39 @@ impl HPAStar {
             }
         }
 
-        let insert_empty_transition =
-            |position,
+        let insert_transition_pair =
+            |a_pos,
+             b_pos,
              transitions: &mut HashMap<TransitionId, Transition>,
              clusters: &mut Vec<Cluster>| {
-                let cluster_idx = HPAStar::locate_cluster(position, width);
-                let id = join_transition_id((position.0 as u32, position.1 as u32));
-                if transitions.get(&id).is_none() {
-                    let edges = vec![];
-                    let t = Transition { position, edges };
-                    transitions.insert(id, t);
-                    clusters[cluster_idx as usize].transitions.push(id);
-                }
+                let insert_empty_transition =
+                    |position,
+                     transitions: &mut HashMap<TransitionId, Transition>,
+                     clusters: &mut Vec<Cluster>| {
+                        let cluster_idx = HPAStar::locate_cluster(position, width);
+                        let id = join_transition_id((position.0 as u32, position.1 as u32));
+                        if transitions.get(&id).is_none() {
+                            let edges = vec![];
+                            let t = Transition { position, edges };
+                            transitions.insert(id, t);
+                            clusters[cluster_idx as usize].transitions.push(id);
+                        }
 
-                id
+                        id
+                    };
+
+                let a = insert_empty_transition(a_pos, transitions, clusters);
+                let b = insert_empty_transition(b_pos, transitions, clusters);
+                transitions.get_mut(&a).unwrap().edges.push(Edge {
+                    cost: 1f32,
+                    destination: b,
+                    path: vec![a_pos, b_pos],
+                });
+                transitions.get_mut(&b).unwrap().edges.push(Edge {
+                    cost: 1f32,
+                    destination: a,
+                    path: vec![b_pos, a_pos],
+                });
             };
 
         // Iterate over vertical border edges
@@ -106,52 +125,19 @@ impl HPAStar {
                     // otherwise close the entrance
                     let first_y = entrance_start;
                     let last_y = y.saturating_sub(1);
-                    let entrance_width = (last_y + 1).saturating_sub(first_y);
+                    let entrance_width = y.saturating_sub(first_y);
                     if entrance_width >= ENTRANCE_WIDTH_BREAKPOINT {
                         let a_pos = (border_left_x, first_y);
-                        let a = insert_empty_transition(a_pos, &mut transitions, &mut clusters);
                         let b_pos = (border_right_x, first_y);
-                        let b = insert_empty_transition(b_pos, &mut transitions, &mut clusters);
-                        transitions.get_mut(&a).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: b,
-                            path: vec![a_pos, b_pos],
-                        });
-                        transitions.get_mut(&b).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: a,
-                            path: vec![b_pos, a_pos],
-                        });
+                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
                         let c_pos = (border_left_x, last_y);
-                        let c = insert_empty_transition(c_pos, &mut transitions, &mut clusters);
                         let d_pos = (border_right_x, last_y);
-                        let d = insert_empty_transition(d_pos, &mut transitions, &mut clusters);
-                        transitions.get_mut(&c).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: d,
-                            path: vec![c_pos, d_pos],
-                        });
-                        transitions.get_mut(&d).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: c,
-                            path: vec![d_pos, c_pos],
-                        });
+                        insert_transition_pair(c_pos, d_pos, &mut transitions, &mut clusters);
                     } else if entrance_width > 0 {
                         let center_y = first_y + ((last_y - first_y) as f32 / 2f32) as u32;
-                        let a_pos = (border_left_x, center_y as u32);
-                        let a = insert_empty_transition(a_pos, &mut transitions, &mut clusters);
-                        let b_pos = (border_right_x, center_y as u32);
-                        let b = insert_empty_transition(b_pos, &mut transitions, &mut clusters);
-                        transitions.get_mut(&a).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: b,
-                            path: vec![a_pos, b_pos],
-                        });
-                        transitions.get_mut(&b).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: a,
-                            path: vec![b_pos, a_pos],
-                        });
+                        let a_pos = (border_left_x, center_y);
+                        let b_pos = (border_right_x, center_y);
+                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
                     }
                     entrance_start = y + 1;
                 }
@@ -174,52 +160,19 @@ impl HPAStar {
 
                     let first_x = entrance_start;
                     let last_x = x.saturating_sub(1);
-                    let entrance_width = (last_x + 1).saturating_sub(first_x);
+                    let entrance_width = x.saturating_sub(first_x);
                     if entrance_width >= ENTRANCE_WIDTH_BREAKPOINT {
                         let a_pos = (first_x, border_top_y);
-                        let a = insert_empty_transition(a_pos, &mut transitions, &mut clusters);
                         let b_pos = (first_x, border_bottom_y);
-                        let b = insert_empty_transition(b_pos, &mut transitions, &mut clusters);
-                        transitions.get_mut(&a).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: b,
-                            path: vec![a_pos, b_pos],
-                        });
-                        transitions.get_mut(&b).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: a,
-                            path: vec![b_pos, a_pos],
-                        });
+                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
                         let c_pos = (last_x, border_top_y);
-                        let c = insert_empty_transition(c_pos, &mut transitions, &mut clusters);
                         let d_pos = (last_x, border_bottom_y);
-                        let d = insert_empty_transition(d_pos, &mut transitions, &mut clusters);
-                        transitions.get_mut(&c).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: d,
-                            path: vec![c_pos, d_pos],
-                        });
-                        transitions.get_mut(&d).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: c,
-                            path: vec![d_pos, c_pos],
-                        });
+                        insert_transition_pair(c_pos, d_pos, &mut transitions, &mut clusters);
                     } else if entrance_width > 0 {
                         let center_x = first_x + ((last_x - first_x) as f32 / 2f32) as u32;
                         let a_pos = (center_x, border_top_y);
-                        let a = insert_empty_transition(a_pos, &mut transitions, &mut clusters);
                         let b_pos = (center_x, border_bottom_y);
-                        let b = insert_empty_transition(b_pos, &mut transitions, &mut clusters);
-                        transitions.get_mut(&a).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: b,
-                            path: vec![a_pos, b_pos],
-                        });
-                        transitions.get_mut(&b).unwrap().edges.push(Edge {
-                            cost: 1f32,
-                            destination: a,
-                            path: vec![b_pos, a_pos],
-                        });
+                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
                     }
                     entrance_start = x + 1;
                 }
