@@ -5,10 +5,10 @@ use std::{
 
 use ordered_float::OrderedFloat;
 
-pub type Tile = (u32, u32);
+use crate::navigability_mask::{self, Coords, NavigabilityMask};
 
 // includes both start and destination elements
-fn reconstruct_path(came_from: &HashMap<Tile, Tile>, mut current: Tile) -> Vec<Tile> {
+fn reconstruct_path(came_from: &HashMap<Coords, Coords>, mut current: Coords) -> Vec<Coords> {
     let mut total_path = vec![current];
     while let Some(&prev) = came_from.get(&current) {
         current = prev;
@@ -18,65 +18,26 @@ fn reconstruct_path(came_from: &HashMap<Tile, Tile>, mut current: Tile) -> Vec<T
     total_path
 }
 
-fn h(a: Tile, b: Tile) -> f32 {
+fn h(a: Coords, b: Coords) -> f32 {
     //(a.0.abs_diff(b.0) + a.1.abs_diff(b.1)) as f32
     ((b.0 as f32 - a.0 as f32).powi(2) + (b.1 as f32 - a.1 as f32).powi(2)).sqrt()
 }
 
-fn find_neighbors(
-    current: &Tile,
-    pathable: &Vec<Vec<bool>>,
-    min_x: u32,
-    max_x: u32,
-    min_y: u32,
-    max_y: u32,
-) -> Vec<Tile> {
-    let mut neighbors = vec![];
-    let (x, y) = (current.0 as i32, current.1 as i32);
-
-    let deltas = [
-        (-1, 0),
-        (1, 0),
-        (0, -1),
-        (0, 1),
-        (-1, -1),
-        (1, -1),
-        (-1, 1),
-        (1, 1),
-    ];
-
-    for (dx, dy) in deltas {
-        let nx = x + dx;
-        let ny = y + dy;
-
-        if nx >= min_x as i32
-            && nx <= max_x as i32
-            && ny >= min_y as i32
-            && ny <= max_y as i32
-            && pathable[ny as usize][nx as usize]
-        {
-            neighbors.push((nx as u32, ny as u32));
-        }
-    }
-
-    neighbors
-}
-
 pub fn astar(
-    start: Tile,
-    goal: Tile,
-    pathable: &Vec<Vec<bool>>,
+    start: Coords,
+    goal: Coords,
+    navigability_mask: &NavigabilityMask,
     min_x: u32,
     max_x: u32,
     min_y: u32,
     max_y: u32,
-) -> Option<Vec<Tile>> {
-    let mut came_from = HashMap::<Tile, Tile>::new();
+) -> Option<Vec<Coords>> {
+    let mut came_from = HashMap::<Coords, Coords>::new();
 
-    let mut g_score = HashMap::<Tile, f32>::new();
+    let mut g_score = HashMap::<Coords, f32>::new();
     g_score.insert(start, 0f32);
 
-    let mut open_set = BinaryHeap::<(Reverse<OrderedFloat<f32>>, Tile)>::new();
+    let mut open_set = BinaryHeap::<(Reverse<OrderedFloat<f32>>, Coords)>::new();
     open_set.push((Reverse(OrderedFloat::from(h(start, goal))), start));
 
     while !open_set.is_empty() {
@@ -85,7 +46,13 @@ pub fn astar(
             return Some(reconstruct_path(&came_from, current));
         }
 
-        for neighbor in find_neighbors(&current, &pathable, min_x, max_x, min_y, max_y) {
+        for neighbor in navigability_mask.get_navigable_neighbors(
+            current,
+            min_x as usize,
+            max_x as usize,
+            min_y as usize,
+            max_y as usize,
+        ) {
             let tentative_g_score = *g_score.get(&current).unwrap() + 1f32;
             if tentative_g_score < *g_score.get(&neighbor).unwrap_or(&f32::INFINITY) {
                 came_from.insert(neighbor, current);
@@ -106,11 +73,11 @@ mod tests {
     fn unreachable() {
         let start = (0, 0);
         let goal = (2, 2);
-        let pathable = vec![
+        let pathable = NavigabilityMask::from_row_major_vec(vec![
             vec![true, true, false],
             vec![true, false, false],
             vec![false, false, true],
-        ];
+        ]);
         let min_x = 0;
         let max_x = 2;
         let min_y = 0;
@@ -123,11 +90,11 @@ mod tests {
     fn finds_a_path() {
         let start = (0, 0);
         let goal = (2, 2);
-        let pathable = vec![
+        let pathable = NavigabilityMask::from_row_major_vec(vec![
             vec![true, true, false],
             vec![true, false, false],
             vec![true, true, true],
-        ];
+        ]);
         let min_x = 0;
         let max_x = 2;
         let min_y = 0;
