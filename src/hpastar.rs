@@ -9,27 +9,53 @@ use std::{
 
 type TransitionId = u64;
 
-fn join_transition_id(tile: Coords) -> TransitionId {
-    ((tile.0 as u64) << 32) | (tile.1 as u64)
-}
+fn join_transition_id(tile: Coords, orientation: &TransitionOrientation) -> TransitionId {
+    let orientation_bits = match orientation {
+        TransitionOrientation::Left => 0,
+        TransitionOrientation::Right => 1,
+        TransitionOrientation::Top => 2,
+        TransitionOrientation::Bottom => 3,
+        TransitionOrientation::None => 4,
+    };
 
-fn split_transition_id(uid: TransitionId) -> Coords {
-    ((uid >> 32) as u32, uid as u32)
+    // Use 3 bits for orientation (shifted to the top of the u64)
+    let orientation_part = (orientation_bits as u64) << 61;
+
+    // Combine tile coords into lower 61 bits
+    let coords_part = ((tile.0 as u64) << 31) | (tile.1 as u64);
+
+    orientation_part | coords_part
 }
 
 struct Edge {
     cost: f32,
     destination: TransitionId,
+    /// encodes if destination resides within a different cluster
+    destination_is_foreign: bool,
     path: Vec<Coords>,
+}
+
+enum TransitionOrientation {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    None,
 }
 
 struct Transition {
     position: Coords,
     edges: Vec<Edge>,
+    orientation: TransitionOrientation,
 }
 
 struct Cluster {
     transitions: Vec<TransitionId>,
+}
+
+enum TransitionPairOrientation {
+    LeftToRight,
+    TopToBot,
 }
 
 pub struct HPAStar {
@@ -42,6 +68,59 @@ pub struct HPAStar {
 }
 
 impl HPAStar {
+    fn insert_empty_transition(
+        &mut self,
+        position: Coords,
+        orientation: TransitionOrientation,
+    ) -> TransitionId {
+        let cluster_idx = self.locate_cluster(position);
+        let id = join_transition_id((position.0 as u32, position.1 as u32), &orientation);
+        // TODO HASH COLLISION AT CORNERS
+        if self.transitions.get(&id).is_none() {
+            let edges = vec![];
+            let t = Transition {
+                position,
+                edges,
+                orientation,
+            };
+            self.transitions.insert(id, t);
+            self.clusters[cluster_idx as usize].transitions.push(id);
+        }
+
+        id
+    }
+
+    fn insert_transition_pair(
+        &mut self,
+        a_pos: Coords,
+        b_pos: Coords,
+        destination_is_foreign: bool,
+        orientation: TransitionPairOrientation,
+    ) {
+        let (o1, o2) = match orientation {
+            TransitionPairOrientation::LeftToRight => {
+                (TransitionOrientation::Left, TransitionOrientation::Right)
+            }
+            TransitionPairOrientation::TopToBot => {
+                (TransitionOrientation::Top, TransitionOrientation::Bottom)
+            }
+        };
+        let a = self.insert_empty_transition(a_pos, o2);
+        let b = self.insert_empty_transition(b_pos, o1);
+        self.transitions.get_mut(&a).unwrap().edges.push(Edge {
+            cost: 1f32,
+            destination: b,
+            destination_is_foreign,
+            path: vec![a_pos, b_pos],
+        });
+        self.transitions.get_mut(&b).unwrap().edges.push(Edge {
+            cost: 1f32,
+            destination: a,
+            destination_is_foreign,
+            path: vec![b_pos, a_pos],
+        });
+    }
+
     pub fn new(
         navigability_mask: NavigabilityMask,
         cluster_size: u32,
@@ -60,179 +139,34 @@ impl HPAStar {
             width
         );
 
-        let mut clusters = Vec::<Cluster>::new();
-        let mut transitions = HashMap::new();
+        let mut this = Self {
+            navigability_mask,
+            cluster_size,
+            entrance_width_breakpoint,
+            clusters: Vec::new(),
+            transitions: HashMap::new(),
+            width,
+        };
 
         // initialize clusters
         for _y in 0..(height / cluster_size) {
             for _x in 0..(width / cluster_size) {
-                clusters.push(Cluster {
+                this.clusters.push(Cluster {
                     transitions: Vec::new(),
                 });
             }
         }
 
-        let insert_transition_pair =
-            |a_pos,
-             b_pos,
-             transitions: &mut HashMap<TransitionId, Transition>,
-             clusters: &mut Vec<Cluster>| {
-                let insert_empty_transition =
-                    |position,
-                     transitions: &mut HashMap<TransitionId, Transition>,
-                     clusters: &mut Vec<Cluster>| {
-                        let cluster_idx = HPAStar::locate_cluster(position, width, cluster_size);
-                        let id = join_transition_id((position.0 as u32, position.1 as u32));
-                        if transitions.get(&id).is_none() {
-                            let edges = vec![];
-                            let t = Transition { position, edges };
-                            transitions.insert(id, t);
-                            clusters[cluster_idx as usize].transitions.push(id);
-                        }
-
-                        id
-                    };
-
-                let a = insert_empty_transition(a_pos, transitions, clusters);
-                let b = insert_empty_transition(b_pos, transitions, clusters);
-                transitions.get_mut(&a).unwrap().edges.push(Edge {
-                    cost: 1f32,
-                    destination: b,
-                    path: vec![a_pos, b_pos],
-                });
-                transitions.get_mut(&b).unwrap().edges.push(Edge {
-                    cost: 1f32,
-                    destination: a,
-                    path: vec![b_pos, a_pos],
-                });
-            };
-
-        // Iterate over vertical border edges
-        for border_start_y in (0..(height - 1)).step_by(cluster_size as usize) {
-            // x coord of the border on the right side cluster
-            for border_right_x in (cluster_size..(width - 1)).step_by(cluster_size as usize) {
-                let border_left_x = border_right_x - 1;
-                let mut entrance_start = border_start_y;
-
-                // walk down the edge
-                // include 1 extra tile that we'll just treat as if it was closed
-                for y in border_start_y..=(border_start_y + cluster_size) {
-                    if y < border_start_y + cluster_size
-                        && navigability_mask.is_navigable((border_left_x, y))
-                        && navigability_mask.is_navigable((border_right_x, y))
-                    {
-                        // if tile pair is open, keep accumulating
-                        continue;
-                    }
-
-                    // otherwise close the entrance
-                    let first_y = entrance_start;
-                    let last_y = y.saturating_sub(1);
-                    let entrance_width = y.saturating_sub(first_y);
-                    if entrance_width >= entrance_width_breakpoint {
-                        let a_pos = (border_left_x, first_y);
-                        let b_pos = (border_right_x, first_y);
-                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
-                        let c_pos = (border_left_x, last_y);
-                        let d_pos = (border_right_x, last_y);
-                        insert_transition_pair(c_pos, d_pos, &mut transitions, &mut clusters);
-                    } else if entrance_width > 0 {
-                        let center_y = first_y + ((last_y - first_y) as f32 / 2f32) as u32;
-                        let a_pos = (border_left_x, center_y);
-                        let b_pos = (border_right_x, center_y);
-                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
-                    }
-                    entrance_start = y + 1;
-                }
-            }
-        }
-
-        // Do the same for all horizontal border edges
-        for border_start_x in (0..(width - 1)).step_by(cluster_size as usize) {
-            for border_bottom_y in (cluster_size..(height - 1)).step_by(cluster_size as usize) {
-                let border_top_y = border_bottom_y - 1;
-                let mut entrance_start = border_start_x;
-
-                for x in border_start_x..=(border_start_x + cluster_size) {
-                    if x < border_start_x + cluster_size
-                        && navigability_mask.is_navigable((x, border_top_y))
-                        && navigability_mask.is_navigable((x, border_bottom_y))
-                    {
-                        continue;
-                    }
-
-                    let first_x = entrance_start;
-                    let last_x = x.saturating_sub(1);
-                    let entrance_width = x.saturating_sub(first_x);
-                    if entrance_width >= entrance_width_breakpoint {
-                        let a_pos = (first_x, border_top_y);
-                        let b_pos = (first_x, border_bottom_y);
-                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
-                        let c_pos = (last_x, border_top_y);
-                        let d_pos = (last_x, border_bottom_y);
-                        insert_transition_pair(c_pos, d_pos, &mut transitions, &mut clusters);
-                    } else if entrance_width > 0 {
-                        let center_x = first_x + ((last_x - first_x) as f32 / 2f32) as u32;
-                        let a_pos = (center_x, border_top_y);
-                        let b_pos = (center_x, border_bottom_y);
-                        insert_transition_pair(a_pos, b_pos, &mut transitions, &mut clusters);
-                    }
-                    entrance_start = x + 1;
-                }
-            }
-        }
+        let top_left = this.to_cluster_space((0, 0));
+        let bot_right = this.to_cluster_space((width - 1, height - 1));
+        this.calculate_cluster_transitions(top_left, bot_right);
 
         // for each cluster add intra-edges for each pair of transition nodes
-        for cluster_idx in 0..clusters.len() {
-            let cluster = &clusters[cluster_idx];
-            for i in 0..cluster.transitions.len() {
-                for j in (i + 1)..cluster.transitions.len() {
-                    let [t1, t2] = {
-                        let [maybe_t1, maybe_t2] = transitions
-                            .get_disjoint_mut([&cluster.transitions[i], &cluster.transitions[j]]);
-                        [maybe_t1.unwrap(), maybe_t2.unwrap()]
-                    };
-                    let start = t1.position;
-                    let goal = t2.position;
-                    let pos =
-                        HPAStar::get_cluster_position(cluster_idx as u32, width, cluster_size);
-                    let min_x = pos.0;
-                    let max_x = pos.0 + cluster_size - 1;
-                    let min_y = pos.1;
-                    let max_y = pos.1 + cluster_size - 1;
-                    let maybe_path =
-                        astar(start, goal, &navigability_mask, min_x, max_x, min_y, max_y);
-                    if let Some(path) = maybe_path {
-                        let mut path_rev = path.clone();
-                        let cost = (path.len() - 1) as f32;
-                        path_rev.reverse();
-                        t1.edges.push(Edge {
-                            cost,
-                            destination: cluster.transitions[j],
-                            path,
-                        });
-                        t2.edges.push(Edge {
-                            cost,
-                            destination: cluster.transitions[i],
-                            path: path_rev,
-                        });
-                    }
-                }
-            }
+        for cluster_idx in 0..this.clusters.len() {
+            this.calculate_cluster_paths(cluster_idx);
         }
 
-        Self {
-            navigability_mask,
-            clusters,
-            transitions,
-            width,
-            cluster_size,
-            entrance_width_breakpoint,
-        }
-    }
-
-    fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
-        ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
+        this
     }
 
     // Returns the sequence of edges used to get to current in reverse order
@@ -335,28 +269,257 @@ impl HPAStar {
         smoothed_path
     }
 
-    pub fn add_obstructions(coords: Vec<Coords>) {
-        // for each coord, locate_cluster
-        // for each unique affected cluster
-        //   recalculate transitions
+    fn to_cluster_space(&self, p: Coords) -> Coords {
+        let x = p.0 / self.cluster_size;
+        let y = p.1 / self.cluster_size;
+        (x, y)
     }
 
-    pub fn remove_obstructions(coords: Vec<Coords>) {
-        // for each coord, locate_cluster
-        // for each unique affected cluster
-        //   recalculate transitions
+    fn calculate_cluster_paths(&mut self, cluster_idx: usize) {
+        let cluster = &self.clusters[cluster_idx];
+        let pos = self.get_cluster_position(cluster_idx as u32);
+        for i in 0..cluster.transitions.len() {
+            for j in (i + 1)..cluster.transitions.len() {
+                let [t1, t2] = {
+                    let [maybe_t1, maybe_t2] = self
+                        .transitions
+                        .get_disjoint_mut([&cluster.transitions[i], &cluster.transitions[j]]);
+                    [maybe_t1.unwrap(), maybe_t2.unwrap()]
+                };
+                let start = t1.position;
+                let goal = t2.position;
+                let min_x = pos.0;
+                let max_x = pos.0 + self.cluster_size - 1;
+                let min_y = pos.1;
+                let max_y = pos.1 + self.cluster_size - 1;
+                let maybe_path = astar(
+                    start,
+                    goal,
+                    &self.navigability_mask,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                );
+                if let Some(path) = maybe_path {
+                    let mut path_rev = path.clone();
+                    let cost = (path.len() - 1) as f32;
+                    path_rev.reverse();
+                    t1.edges.push(Edge {
+                        cost,
+                        destination: cluster.transitions[j],
+                        destination_is_foreign: false,
+                        path,
+                    });
+                    t2.edges.push(Edge {
+                        cost,
+                        destination: cluster.transitions[i],
+                        destination_is_foreign: false,
+                        path: path_rev,
+                    });
+                }
+            }
+        }
+    }
+
+    fn recalculate_cluster_paths(&mut self, cluster_idx: usize) {
+        for transition_id in self.clusters[cluster_idx as usize].transitions.iter() {
+            let t = self.transitions.get_mut(transition_id).unwrap();
+            t.edges.retain(|e| e.destination_is_foreign);
+        }
+        self.calculate_cluster_paths(cluster_idx as usize);
+    }
+
+    /*
+    excluding walls of outer clusters:
+
+       |  |  |  |
+    -----------------
+       |  |  |  |
+    -----------------
+       |  |  |  |
+
+     */
+    fn calculate_cluster_transitions(
+        &mut self,
+        (min_cx, min_cy): Coords,
+        (max_cx, max_cy): Coords,
+    ) {
+        for cx in min_cx + 1..=max_cx {
+            let right_x = cx * self.cluster_size;
+            for cy in min_cy..=max_cy {
+                let start_y = cy * self.cluster_size;
+                let mut entrance_start = start_y;
+
+                for y in start_y..=start_y + self.cluster_size {
+                    if y < start_y + self.cluster_size
+                        && self.navigability_mask.is_navigable((right_x - 1, y))
+                        && self.navigability_mask.is_navigable((right_x, y))
+                    {
+                        // if tile pair is open, keep accumulating
+                        continue;
+                    }
+
+                    // otherwise close the entrance
+                    let first_y = entrance_start;
+                    let last_y = y.saturating_sub(1);
+                    let entrance_width = y.saturating_sub(first_y);
+                    if entrance_width >= self.entrance_width_breakpoint {
+                        let a_pos = (right_x - 1, first_y);
+                        let b_pos = (right_x, first_y);
+                        self.insert_transition_pair(
+                            a_pos,
+                            b_pos,
+                            true,
+                            TransitionPairOrientation::LeftToRight,
+                        );
+                        let c_pos = (right_x - 1, last_y);
+                        let d_pos = (right_x, last_y);
+                        self.insert_transition_pair(
+                            c_pos,
+                            d_pos,
+                            true,
+                            TransitionPairOrientation::LeftToRight,
+                        );
+                    } else if entrance_width > 0 {
+                        let center_y = first_y + ((last_y - first_y) as f32 / 2f32) as u32;
+                        let a_pos = (right_x - 1, center_y);
+                        let b_pos = (right_x, center_y);
+                        self.insert_transition_pair(
+                            a_pos,
+                            b_pos,
+                            true,
+                            TransitionPairOrientation::LeftToRight,
+                        );
+                    }
+                    entrance_start = y + 1;
+                }
+            }
+        }
+
+        for cy in min_cy + 1..=max_cy {
+            let bot_y = cy * self.cluster_size;
+            for cx in min_cx..=max_cx {
+                let start_x = cx * self.cluster_size;
+                let mut entrance_start = start_x;
+
+                for x in start_x..=start_x + self.cluster_size {
+                    if x < start_x + self.cluster_size
+                        && self.navigability_mask.is_navigable((x, bot_y - 1))
+                        && self.navigability_mask.is_navigable((x, bot_y))
+                    {
+                        continue;
+                    }
+
+                    let first_x = entrance_start;
+                    let last_x = x.saturating_sub(1);
+                    let entrance_width = x.saturating_sub(first_x);
+                    if entrance_width >= self.entrance_width_breakpoint {
+                        let a_pos = (first_x, bot_y - 1);
+                        let b_pos = (first_x, bot_y);
+                        self.insert_transition_pair(
+                            a_pos,
+                            b_pos,
+                            true,
+                            TransitionPairOrientation::TopToBot,
+                        );
+                        let c_pos = (last_x, bot_y - 1);
+                        let d_pos = (last_x, bot_y);
+                        self.insert_transition_pair(
+                            c_pos,
+                            d_pos,
+                            true,
+                            TransitionPairOrientation::TopToBot,
+                        );
+                    } else if entrance_width > 0 {
+                        let center_x = first_x + ((last_x - first_x) as f32 / 2f32) as u32;
+                        let a_pos = (center_x, bot_y - 1);
+                        let b_pos = (center_x, bot_y);
+                        self.insert_transition_pair(
+                            a_pos,
+                            b_pos,
+                            true,
+                            TransitionPairOrientation::TopToBot,
+                        );
+                    }
+                    entrance_start = x + 1;
+                }
+            }
+        }
+    }
+
+    fn recalculate_cluster_transitions(
+        &mut self,
+        (min_cx, min_cy): Coords,
+        (max_cx, max_cy): Coords,
+    ) {
+        // remove existing transitions
+        for cx in min_cx..=max_cx {
+            for cy in min_cy..=max_cy {
+                let cluster_idx = cy * (self.width / self.cluster_size) + cx;
+                let cluster = &mut self.clusters[cluster_idx as usize];
+                // Remove transitions from self.transitions
+                for t_id in &cluster.transitions {
+                    let o = &self.transitions.get(t_id).unwrap().orientation;
+                    if match o {
+                        TransitionOrientation::Left => cx != min_cx,
+                        TransitionOrientation::Right => cx != max_cx,
+                        TransitionOrientation::Top => cy != min_cy,
+                        TransitionOrientation::Bottom => cy != max_cy,
+                        TransitionOrientation::None => true,
+                    } {
+                        self.transitions.remove(t_id);
+                    }
+                }
+                // remove transitions from cluster
+                cluster
+                    .transitions
+                    .retain(|t_id| self.transitions.get(t_id).is_some());
+            }
+        }
+
+        self.calculate_cluster_transitions((min_cx, min_cy), (max_cx, max_cy));
+    }
+
+    fn update_clusters(&mut self, (min_x, min_y): Coords, (max_x, max_y): Coords) {
+        let (min_cx, min_cy) = self.to_cluster_space((min_x - 1, min_y - 1));
+        let (max_cx, max_cy) = self.to_cluster_space((max_x + 1, max_y + 1));
+
+        self.recalculate_cluster_transitions((min_cx, min_cy), (max_cx, max_cy));
+        for cx in min_cx..=max_cx {
+            for cy in min_cy..=max_cy {
+                let cluster_idx = cy * (self.width / self.cluster_size) + cx;
+                self.recalculate_cluster_paths(cluster_idx as usize);
+            }
+        }
+    }
+
+    pub fn add_obstructions(&mut self, top_left: Coords, bot_right: Coords) {
+        self.navigability_mask.set_rect(top_left, bot_right, false);
+        self.update_clusters(top_left, bot_right);
+    }
+
+    pub fn remove_obstructions(&mut self, top_left: Coords, bot_right: Coords) {
+        self.navigability_mask.set_rect(top_left, bot_right, true);
+        self.update_clusters(top_left, bot_right);
     }
 
     fn add_temp_transition(&mut self, p: (u32, u32)) -> TransitionId {
-        let id = join_transition_id(p);
+        let orientation = TransitionOrientation::None;
+        let id = join_transition_id(p, &orientation);
         if self.transitions.get(&id).is_some() {
             return id;
         }
         let edges = vec![];
-        let transition = Transition { edges, position: p };
+        let transition = Transition {
+            edges,
+            position: p,
+            orientation: orientation,
+        };
         self.transitions.insert(id, transition);
 
-        let cluster_idx = HPAStar::locate_cluster(p, self.width, self.cluster_size) as usize;
+        let cluster_idx = self.locate_cluster(p) as usize;
+        let pos = self.get_cluster_position(cluster_idx as u32);
         let cluster = &self.clusters[cluster_idx];
         for i in 0..cluster.transitions.len() {
             let [t1, t2] = {
@@ -367,8 +530,6 @@ impl HPAStar {
             };
             let start = t1.position;
             let goal = t2.position;
-            let pos =
-                HPAStar::get_cluster_position(cluster_idx as u32, self.width, self.cluster_size);
             let min_x = pos.0;
             let max_x = pos.0 + self.cluster_size - 1;
             let min_y = pos.1;
@@ -389,11 +550,13 @@ impl HPAStar {
                 t1.edges.push(Edge {
                     cost,
                     destination: id,
+                    destination_is_foreign: false,
                     path,
                 });
                 t2.edges.push(Edge {
                     cost,
                     destination: cluster.transitions[i],
+                    destination_is_foreign: false,
                     path: path_rev,
                 });
             }
@@ -403,7 +566,7 @@ impl HPAStar {
 
     fn remove_temp_transition(&mut self, removee_id: TransitionId) {
         let removee = self.transitions.get(&removee_id).unwrap();
-        let cluster_idx = HPAStar::locate_cluster(removee.position, self.width, self.cluster_size);
+        let cluster_idx = self.locate_cluster(removee.position);
         let cluster_transitions = &self.clusters[cluster_idx as usize].transitions;
         for t_id in cluster_transitions {
             let t = self.transitions.get_mut(t_id).unwrap();
@@ -418,17 +581,17 @@ impl HPAStar {
         self.transitions.remove(&removee_id);
     }
 
-    fn locate_cluster(p: (u32, u32), width: u32, cluster_size: u32) -> u32 {
-        let x = (p.0 as f32 / cluster_size as f32).floor() as u32;
-        let y = (p.1 as f32 / cluster_size as f32).floor() as u32;
-        y * (width / cluster_size) + x
+    fn locate_cluster(&self, p: Coords) -> u32 {
+        let x = p.0 / self.cluster_size;
+        let y = p.1 / self.cluster_size;
+        y * (self.width / self.cluster_size) + x
     }
 
-    fn get_cluster_position(idx: u32, width: u32, cluster_size: u32) -> Coords {
-        let clusters_per_row = width / cluster_size;
+    fn get_cluster_position(&self, idx: u32) -> Coords {
+        let clusters_per_row = self.width / self.cluster_size;
         let x = idx % clusters_per_row;
         let y = idx / clusters_per_row;
-        (x * cluster_size, y * cluster_size)
+        (x * self.cluster_size, y * self.cluster_size)
     }
 }
 
@@ -684,8 +847,8 @@ mod tests {
         );
         assert!(nav.clusters.len() == 4);
         assert!(
-            nav.transitions.len() == 12,
-            "Expected 12 transitions, was: {}",
+            nav.transitions.len() == 16,
+            "Expected 16 transitions, was: {}",
             nav.transitions.len()
         );
     }
@@ -859,6 +1022,44 @@ mod tests {
         let hpastar_path = nav.find_path(start, end);
         test_helpers::draw_grid(
             pathable,
+            hpastar_path,
+            nav.transitions
+                .into_iter()
+                .map(|(_id, transition)| transition.position)
+                .collect(),
+            cluster_size,
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn add_obstructions() -> Result<(), Box<dyn std::error::Error>> {
+        let path = "benchmarks/BigGameHunters.map";
+        let pathable = test_helpers::load_map(path)?;
+        let cluster_size = 16;
+        let entrance_width_breakpoint = 8;
+        let mut nav = HPAStar::new(
+            NavigabilityMask::from_row_major_vec(pathable.clone()),
+            cluster_size,
+            entrance_width_breakpoint,
+        );
+        //let p = (2 * cluster_size, 2 * cluster_size);
+        //nav.add_obstructions(p, p);
+        nav.add_obstructions(
+            (2 * cluster_size, 2 * cluster_size),
+            (6 * cluster_size - 1, 4 * cluster_size - 1),
+        );
+        nav.remove_obstructions(
+            (13 * cluster_size, 10 * cluster_size),
+            (16 * cluster_size - 1, 13 * cluster_size - 1),
+        );
+        let start: (u32, u32) = (20, 16);
+        let end: (u32, u32) = (132, 507);
+        let hpastar_path = nav.find_path(start, end);
+        //let hpastar_path = vec![];
+        test_helpers::draw_grid(
+            nav.navigability_mask.to_row_major_vec(),
             hpastar_path,
             nav.transitions
                 .into_iter()

@@ -25,6 +25,18 @@ impl NavigabilityMask {
             width,
         }
     }
+    pub fn to_row_major_vec(&self) -> Vec<Vec<bool>> {
+        let mut result = vec![vec![false; self.width]; self.height];
+        for row in 0..self.height {
+            for col in 0..self.width {
+                let idx = row * self.width + col;
+                if self.bitvec.contains(idx) {
+                    result[row][col] = true;
+                }
+            }
+        }
+        result
+    }
     pub fn is_navigable(&self, (x, y): Coords) -> bool {
         self.bitvec.contains(y as usize * self.width + x as usize)
     }
@@ -67,7 +79,18 @@ impl NavigabilityMask {
         })
     }
 
-    pub fn set_rect(&mut self, top_left: Coords, bot_right: Coords) {}
+    pub fn set_rect(&mut self, (min_x, min_y): Coords, (max_x, max_y): Coords, state: bool) {
+        for x in min_x..=max_x {
+            for y in min_y..=max_y {
+                let idx = y as usize * self.width + x as usize;
+                if state {
+                    self.bitvec.insert(idx);
+                } else {
+                    self.bitvec.remove(idx);
+                }
+            }
+        }
+    }
 
     // Using Bresenham line drawing algorithm
     pub fn visibility_check(&self, a: Coords, b: Coords) -> bool {
