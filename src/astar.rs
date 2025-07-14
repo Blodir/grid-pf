@@ -38,7 +38,7 @@ pub fn astar(
     max_x: u32,
     min_y: u32,
     max_y: u32,
-) -> Option<Vec<Coords>> {
+) -> Option<(Vec<Coords>, u32)> {
     let mut came_from = HashMap::<Coords, Coords>::new();
 
     let mut g_score = HashMap::<Coords, u32>::new();
@@ -47,10 +47,11 @@ pub fn astar(
     let mut open_set = BinaryHeap::<(Reverse<u32>, Coords)>::new();
     open_set.push((Reverse(h(start, goal)), start));
 
-    while !open_set.is_empty() {
-        let current = open_set.pop().unwrap().1;
+    while let Some((_, current)) = open_set.pop() {
         if current == goal {
-            return Some(reconstruct_path(&came_from, current));
+            let path = reconstruct_path(&came_from, current);
+            let cost = *g_score.get(&goal).unwrap();
+            return Some((path, cost));
         }
 
         for (neighbor, is_diag) in navigability_mask.get_navigable_neighbors(
@@ -74,7 +75,7 @@ pub fn astar(
             }
         }
     }
-    return None;
+    None
 }
 
 #[cfg(test)]
@@ -114,6 +115,6 @@ mod tests {
         let res = astar(start, goal, &pathable, min_x, max_x, min_y, max_y);
         assert!(res.is_some());
         let res = res.unwrap();
-        assert!(res == vec![(0, 0), (0, 1), (1, 2), (2, 2)]);
+        assert!(res.0 == vec![(0, 0), (0, 1), (1, 2), (2, 2)]);
     }
 }

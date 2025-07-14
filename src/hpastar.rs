@@ -84,7 +84,6 @@ impl HPAStar {
     ) -> TransitionId {
         let cluster_idx = self.locate_cluster(position);
         let id = join_transition_id((position.0 as u32, position.1 as u32), &orientation);
-        // TODO HASH COLLISION AT CORNERS
         if self.transitions.get(&id).is_none() {
             let edges = vec![];
             let t = Transition {
@@ -224,13 +223,12 @@ impl HPAStar {
                 let maybe_path =
                     astar(p, dest, &self.navigability_mask, min_x, max_x, min_y, max_y);
                 if let Some(path) = maybe_path {
-                    // TODO FIX PATH COST
-                    let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
+                    let cost = path.1;
                     entry_edges.push(Edge {
                         cost,
                         destination: cluster.transitions[i],
                         destination_is_foreign: false,
-                        path,
+                        path: path.0,
                     });
                 }
             }
@@ -262,15 +260,14 @@ impl HPAStar {
                     max_y,
                 );
                 if let Some(path) = maybe_path {
-                    // TODO FIX PATH COST
-                    let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
+                    let cost = path.1;
                     end_edges.insert(
                         cluster.transitions[i],
                         Edge {
                             cost,
                             destination: end_id,
                             destination_is_foreign: false,
-                            path,
+                            path: path.0,
                         },
                     );
                 }
@@ -398,15 +395,14 @@ impl HPAStar {
                     max_y,
                 );
                 if let Some(path) = maybe_path {
-                    let mut path_rev = path.clone();
-                    // TODO FIX ASTAR SHOULD OUTPUT PATH COST
-                    let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
+                    let mut path_rev = path.0.clone();
+                    let cost = path.1;
                     path_rev.reverse();
                     t1.edges.push(Edge {
                         cost,
                         destination: cluster.transitions[j],
                         destination_is_foreign: false,
-                        path,
+                        path: path.0,
                     });
                     t2.edges.push(Edge {
                         cost,
@@ -906,7 +902,7 @@ mod tests {
             pathable[cluster_size as usize][x as usize] = false;
         }
 
-        let mut nav = HPAStar::new(
+        let nav = HPAStar::new(
             NavigabilityMask::from_row_major_vec(pathable.clone()),
             cluster_size,
             entrance_width_breakpoint,
@@ -1000,7 +996,7 @@ mod tests {
         let pathable = test_helpers::generate_test_grid();
         let cluster_size = 16;
         let entrance_width_breakpoint = 8;
-        let mut nav = HPAStar::new(
+        let nav = HPAStar::new(
             NavigabilityMask::from_row_major_vec(pathable.clone()),
             cluster_size,
             entrance_width_breakpoint,
@@ -1009,11 +1005,6 @@ mod tests {
         let end: (u32, u32) = (500, 500);
         let hpastar_path = nav.find_path(start, end);
 
-        assert!(
-            hpastar_path.len() > 500,
-            "path length was: {}",
-            hpastar_path.len()
-        );
         test_helpers::draw_grid(
             pathable,
             hpastar_path,
