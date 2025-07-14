@@ -1,10 +1,8 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
-    f32::consts::SQRT_2,
+    u32,
 };
-
-use ordered_float::OrderedFloat;
 
 use crate::navigability_mask::{self, Coords, NavigabilityMask};
 
@@ -19,9 +17,17 @@ fn reconstruct_path(came_from: &HashMap<Coords, Coords>, mut current: Coords) ->
     total_path
 }
 
-fn h(a: Coords, b: Coords) -> f32 {
-    //(a.0.abs_diff(b.0) + a.1.abs_diff(b.1)) as f32
-    ((b.0 as f32 - a.0 as f32).powi(2) + (b.1 as f32 - a.1 as f32).powi(2)).sqrt()
+// Octile distance
+const SCALE: u32 = 1000;
+pub const STRAIGHT_COST: u32 = 1000;
+pub const DIAGONAL_COST: u32 = 1414; // approx sqrt(2) * 1000
+
+pub fn h(a: Coords, b: Coords) -> u32 {
+    let dx = (b.0 as i32 - a.0 as i32).abs() as u32;
+    let dy = (b.1 as i32 - a.1 as i32).abs() as u32;
+    let min = dx.min(dy);
+    let max = dx.max(dy);
+    DIAGONAL_COST * min + STRAIGHT_COST * (max - min)
 }
 
 pub fn astar(
@@ -35,11 +41,11 @@ pub fn astar(
 ) -> Option<Vec<Coords>> {
     let mut came_from = HashMap::<Coords, Coords>::new();
 
-    let mut g_score = HashMap::<Coords, f32>::new();
-    g_score.insert(start, 0f32);
+    let mut g_score = HashMap::<Coords, u32>::new();
+    g_score.insert(start, 0u32);
 
-    let mut open_set = BinaryHeap::<(Reverse<OrderedFloat<f32>>, Coords)>::new();
-    open_set.push((Reverse(OrderedFloat::from(h(start, goal))), start));
+    let mut open_set = BinaryHeap::<(Reverse<u32>, Coords)>::new();
+    open_set.push((Reverse(h(start, goal)), start));
 
     while !open_set.is_empty() {
         let current = open_set.pop().unwrap().1;
@@ -54,13 +60,17 @@ pub fn astar(
             min_y as usize,
             max_y as usize,
         ) {
-            let tentative_g_score =
-                *g_score.get(&current).unwrap() + if is_diag { SQRT_2 } else { 1f32 };
-            if tentative_g_score < *g_score.get(&neighbor).unwrap_or(&f32::INFINITY) {
+            let tentative_g_score = *g_score.get(&current).unwrap()
+                + if is_diag {
+                    DIAGONAL_COST
+                } else {
+                    STRAIGHT_COST
+                };
+            if tentative_g_score < *g_score.get(&neighbor).unwrap_or(&u32::MAX) {
                 came_from.insert(neighbor, current);
                 g_score.insert(neighbor, tentative_g_score);
                 let neighbor_f_score = tentative_g_score + h(neighbor, goal);
-                open_set.push((Reverse(OrderedFloat::from(neighbor_f_score)), neighbor));
+                open_set.push((Reverse(neighbor_f_score), neighbor));
             }
         }
     }

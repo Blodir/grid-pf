@@ -1,7 +1,8 @@
+use crate::astar;
 use crate::astar::astar;
 use crate::navigability_mask::Coords;
 use crate::navigability_mask::NavigabilityMask;
-use ordered_float::OrderedFloat;
+use std::u32;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
@@ -28,7 +29,7 @@ fn join_transition_id(tile: Coords, orientation: &TransitionOrientation) -> Tran
 }
 
 struct Edge {
-    cost: f32,
+    cost: u32,
     destination: TransitionId,
     /// encodes if destination resides within a different cluster
     destination_is_foreign: bool,
@@ -108,13 +109,13 @@ impl HPAStar {
         let a = self.insert_empty_transition(a_pos, o2);
         let b = self.insert_empty_transition(b_pos, o1);
         self.transitions.get_mut(&a).unwrap().edges.push(Edge {
-            cost: 1f32,
+            cost: astar::STRAIGHT_COST,
             destination: b,
             destination_is_foreign,
             path: vec![a_pos, b_pos],
         });
         self.transitions.get_mut(&b).unwrap().edges.push(Edge {
-            cost: 1f32,
+            cost: astar::STRAIGHT_COST,
             destination: a,
             destination_is_foreign,
             path: vec![b_pos, a_pos],
@@ -184,11 +185,10 @@ impl HPAStar {
         total_path
     }
 
-    fn h(&self, a_id: TransitionId, b_id: TransitionId) -> f32 {
+    fn h(&self, a_id: TransitionId, b_id: TransitionId) -> u32 {
         let a = self.transitions.get(&a_id).unwrap().position;
         let b = self.transitions.get(&b_id).unwrap().position;
-        // (a.0.abs_diff(b.0) + a.1.abs_diff(b.1)) as f32
-        ((b.0 as f32 - a.0 as f32).powi(2) + (b.1 as f32 - a.1 as f32).powi(2)).sqrt()
+        astar::h(a, b)
     }
 
     pub fn find_path(&mut self, start_pos: (u32, u32), end_pos: (u32, u32)) -> Vec<Coords> {
@@ -199,14 +199,11 @@ impl HPAStar {
         // find the path of transitions
         let mut came_from = HashMap::<TransitionId, (TransitionId, &Edge)>::new();
 
-        let mut g_score = HashMap::<TransitionId, f32>::new();
-        g_score.insert(start_id, 0f32);
+        let mut g_score = HashMap::<TransitionId, u32>::new();
+        g_score.insert(start_id, 0u32);
 
-        let mut open_set = BinaryHeap::<(Reverse<OrderedFloat<f32>>, TransitionId)>::new();
-        open_set.push((
-            Reverse(OrderedFloat::from(self.h(start_id, end_id))),
-            start_id,
-        ));
+        let mut open_set = BinaryHeap::<(Reverse<u32>, TransitionId)>::new();
+        open_set.push((Reverse(self.h(start_id, end_id)), start_id));
 
         let mut maybe_abstract_path: Option<Vec<&Edge>> = None;
         while !open_set.is_empty() {
@@ -218,19 +215,13 @@ impl HPAStar {
 
             for neighbor_edge in &self.transitions.get(&current).unwrap().edges {
                 let tentative_g_score = *g_score.get(&current).unwrap() + neighbor_edge.cost;
-                if tentative_g_score
-                    < *g_score
-                        .get(&neighbor_edge.destination)
-                        .unwrap_or(&f32::INFINITY)
+                if tentative_g_score < *g_score.get(&neighbor_edge.destination).unwrap_or(&u32::MAX)
                 {
                     came_from.insert(neighbor_edge.destination, (current, neighbor_edge));
                     g_score.insert(neighbor_edge.destination, tentative_g_score);
                     let neighbor_f_score =
                         tentative_g_score + self.h(neighbor_edge.destination, end_id);
-                    open_set.push((
-                        Reverse(OrderedFloat::from(neighbor_f_score)),
-                        neighbor_edge.destination,
-                    ));
+                    open_set.push((Reverse(neighbor_f_score), neighbor_edge.destination));
                 }
             }
         }
@@ -303,7 +294,7 @@ impl HPAStar {
                 );
                 if let Some(path) = maybe_path {
                     let mut path_rev = path.clone();
-                    let cost = (path.len() - 1) as f32;
+                    let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
                     path_rev.reverse();
                     t1.edges.push(Edge {
                         cost,
@@ -382,7 +373,7 @@ impl HPAStar {
                             TransitionPairOrientation::LeftToRight,
                         );
                     } else if entrance_width > 0 {
-                        let center_y = first_y + ((last_y - first_y) as f32 / 2f32) as u32;
+                        let center_y = first_y + (last_y - first_y) / 2;
                         let a_pos = (right_x - 1, center_y);
                         let b_pos = (right_x, center_y);
                         self.insert_transition_pair(
@@ -432,7 +423,7 @@ impl HPAStar {
                             TransitionPairOrientation::TopToBot,
                         );
                     } else if entrance_width > 0 {
-                        let center_x = first_x + ((last_x - first_x) as f32 / 2f32) as u32;
+                        let center_x = first_x + (last_x - first_x) / 2;
                         let a_pos = (center_x, bot_y - 1);
                         let b_pos = (center_x, bot_y);
                         self.insert_transition_pair(
@@ -545,7 +536,7 @@ impl HPAStar {
             );
             if let Some(path) = maybe_path {
                 let mut path_rev = path.clone();
-                let cost = (path.len() - 1) as f32;
+                let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
                 path_rev.reverse();
                 t1.edges.push(Edge {
                     cost,
