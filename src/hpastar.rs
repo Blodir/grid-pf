@@ -2,6 +2,7 @@ use crate::astar;
 use crate::astar::astar;
 use crate::navigability_mask::Coords;
 use crate::navigability_mask::NavigabilityMask;
+use std::iter;
 use std::u32;
 use std::{
     cmp::Reverse,
@@ -57,6 +58,13 @@ struct Cluster {
 enum TransitionPairOrientation {
     LeftToRight,
     TopToBot,
+}
+
+struct OverlayGraph {
+    start_id: TransitionId,
+    end_id: TransitionId,
+    entry_edges: Vec<Edge>,
+    end_edges: HashMap<TransitionId, Edge>,
 }
 
 pub struct HPAStar {
@@ -191,36 +199,137 @@ impl HPAStar {
         astar::h(a, b)
     }
 
-    pub fn find_path(&mut self, start_pos: (u32, u32), end_pos: (u32, u32)) -> Vec<Coords> {
-        // check if transition already exists at start/end
-        let start_id = self.add_temp_transition(start_pos);
-        let end_id = self.add_temp_transition(end_pos);
+    fn create_overlay_graph(&self, start: Coords, end: Coords) -> OverlayGraph {
+        let start_id = join_transition_id(start, &TransitionOrientation::None);
+        let end_id = join_transition_id(end, &TransitionOrientation::None);
+        let mut entry_edges = vec![];
+        let mut end_edges = HashMap::new();
+
+        // insert entry edges
+        {
+            let p = start;
+            let cluster_idx = self.locate_cluster(p) as usize;
+            let cluster_topleft = self.get_cluster_position(cluster_idx as u32);
+            let cluster = &self.clusters[cluster_idx];
+            let min_x = cluster_topleft.0;
+            let max_x = cluster_topleft.0 + self.cluster_size - 1;
+            let min_y = cluster_topleft.1;
+            let max_y = cluster_topleft.1 + self.cluster_size - 1;
+            for i in 0..cluster.transitions.len() {
+                let dest = self
+                    .transitions
+                    .get(&cluster.transitions[i])
+                    .unwrap()
+                    .position;
+                let maybe_path =
+                    astar(p, dest, &self.navigability_mask, min_x, max_x, min_y, max_y);
+                if let Some(path) = maybe_path {
+                    // TODO FIX PATH COST
+                    let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
+                    entry_edges.push(Edge {
+                        cost,
+                        destination: cluster.transitions[i],
+                        destination_is_foreign: false,
+                        path,
+                    });
+                }
+            }
+        }
+
+        // insert end edges
+        {
+            let p = end;
+            let cluster_idx = self.locate_cluster(p) as usize;
+            let cluster_topleft = self.get_cluster_position(cluster_idx as u32);
+            let cluster = &self.clusters[cluster_idx];
+            let min_x = cluster_topleft.0;
+            let max_x = cluster_topleft.0 + self.cluster_size - 1;
+            let min_y = cluster_topleft.1;
+            let max_y = cluster_topleft.1 + self.cluster_size - 1;
+            for i in 0..cluster.transitions.len() {
+                let source = self
+                    .transitions
+                    .get(&cluster.transitions[i])
+                    .unwrap()
+                    .position;
+                let maybe_path = astar(
+                    source,
+                    p,
+                    &self.navigability_mask,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                );
+                if let Some(path) = maybe_path {
+                    // TODO FIX PATH COST
+                    let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
+                    end_edges.insert(
+                        cluster.transitions[i],
+                        Edge {
+                            cost,
+                            destination: end_id,
+                            destination_is_foreign: false,
+                            path,
+                        },
+                    );
+                }
+            }
+        }
+
+        OverlayGraph {
+            start_id,
+            end_id,
+            entry_edges,
+            end_edges,
+        }
+    }
+
+    pub fn find_path(&self, start_pos: (u32, u32), end_pos: (u32, u32)) -> Vec<Coords> {
+        let overlay = self.create_overlay_graph(start_pos, end_pos);
 
         // find the path of transitions
         let mut came_from = HashMap::<TransitionId, (TransitionId, &Edge)>::new();
 
         let mut g_score = HashMap::<TransitionId, u32>::new();
-        g_score.insert(start_id, 0u32);
+        for edge in &overlay.entry_edges {
+            g_score.insert(edge.destination, edge.cost);
+        }
 
         let mut open_set = BinaryHeap::<(Reverse<u32>, TransitionId)>::new();
-        open_set.push((Reverse(self.h(start_id, end_id)), start_id));
+        for edge in &overlay.entry_edges {
+            let p = self.transitions.get(&edge.destination).unwrap().position;
+            open_set.push((Reverse(astar::h(p, end_pos)), edge.destination));
+        }
 
         let mut maybe_abstract_path: Option<Vec<&Edge>> = None;
         while !open_set.is_empty() {
             let current = open_set.pop().unwrap().1;
-            if current == end_id {
+            if current == overlay.end_id {
                 maybe_abstract_path = Some(self.reconstruct_path(&came_from, current));
                 break;
             }
 
-            for neighbor_edge in &self.transitions.get(&current).unwrap().edges {
+            for neighbor_edge in self
+                .transitions
+                .get(&current)
+                .unwrap()
+                .edges
+                .iter()
+                .chain(overlay.end_edges.get(&current).into_iter())
+            {
                 let tentative_g_score = *g_score.get(&current).unwrap() + neighbor_edge.cost;
                 if tentative_g_score < *g_score.get(&neighbor_edge.destination).unwrap_or(&u32::MAX)
                 {
                     came_from.insert(neighbor_edge.destination, (current, neighbor_edge));
                     g_score.insert(neighbor_edge.destination, tentative_g_score);
-                    let neighbor_f_score =
-                        tentative_g_score + self.h(neighbor_edge.destination, end_id);
+                    let p = self
+                        .transitions
+                        .get(&neighbor_edge.destination)
+                        .map(|t| t.position)
+                        // end pos is not in self.transitions
+                        .unwrap_or(end_pos);
+                    let neighbor_f_score = tentative_g_score + astar::h(p, end_pos);
                     open_set.push((Reverse(neighbor_f_score), neighbor_edge.destination));
                 }
             }
@@ -236,10 +345,6 @@ impl HPAStar {
             }
         }
         concrete_path.push(end_pos);
-
-        // remove transitions
-        self.remove_temp_transition(start_id);
-        self.remove_temp_transition(end_id);
 
         // path smoothing
         let mut smoothed_path = Vec::new();
@@ -269,6 +374,10 @@ impl HPAStar {
     fn calculate_cluster_paths(&mut self, cluster_idx: usize) {
         let cluster = &self.clusters[cluster_idx];
         let pos = self.get_cluster_position(cluster_idx as u32);
+        let min_x = pos.0;
+        let max_x = pos.0 + self.cluster_size - 1;
+        let min_y = pos.1;
+        let max_y = pos.1 + self.cluster_size - 1;
         for i in 0..cluster.transitions.len() {
             for j in (i + 1)..cluster.transitions.len() {
                 let [t1, t2] = {
@@ -279,10 +388,6 @@ impl HPAStar {
                 };
                 let start = t1.position;
                 let goal = t2.position;
-                let min_x = pos.0;
-                let max_x = pos.0 + self.cluster_size - 1;
-                let min_y = pos.1;
-                let max_y = pos.1 + self.cluster_size - 1;
                 let maybe_path = astar(
                     start,
                     goal,
@@ -294,6 +399,7 @@ impl HPAStar {
                 );
                 if let Some(path) = maybe_path {
                     let mut path_rev = path.clone();
+                    // TODO FIX ASTAR SHOULD OUTPUT PATH COST
                     let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
                     path_rev.reverse();
                     t1.edges.push(Edge {
@@ -493,83 +599,6 @@ impl HPAStar {
     pub fn remove_obstructions(&mut self, top_left: Coords, bot_right: Coords) {
         self.navigability_mask.set_rect(top_left, bot_right, true);
         self.update_clusters(top_left, bot_right);
-    }
-
-    fn add_temp_transition(&mut self, p: (u32, u32)) -> TransitionId {
-        let orientation = TransitionOrientation::None;
-        let id = join_transition_id(p, &orientation);
-        if self.transitions.get(&id).is_some() {
-            return id;
-        }
-        let edges = vec![];
-        let transition = Transition {
-            edges,
-            position: p,
-            orientation: orientation,
-        };
-        self.transitions.insert(id, transition);
-
-        let cluster_idx = self.locate_cluster(p) as usize;
-        let pos = self.get_cluster_position(cluster_idx as u32);
-        let cluster = &self.clusters[cluster_idx];
-        for i in 0..cluster.transitions.len() {
-            let [t1, t2] = {
-                let [maybe_t1, maybe_t2] = self
-                    .transitions
-                    .get_disjoint_mut([&cluster.transitions[i], &id]);
-                [maybe_t1.unwrap(), maybe_t2.unwrap()]
-            };
-            let start = t1.position;
-            let goal = t2.position;
-            let min_x = pos.0;
-            let max_x = pos.0 + self.cluster_size - 1;
-            let min_y = pos.1;
-            let max_y = pos.1 + self.cluster_size - 1;
-            let maybe_path = astar(
-                start,
-                goal,
-                &self.navigability_mask,
-                min_x,
-                max_x,
-                min_y,
-                max_y,
-            );
-            if let Some(path) = maybe_path {
-                let mut path_rev = path.clone();
-                let cost = (path.len() as u32 - 1) * astar::STRAIGHT_COST;
-                path_rev.reverse();
-                t1.edges.push(Edge {
-                    cost,
-                    destination: id,
-                    destination_is_foreign: false,
-                    path,
-                });
-                t2.edges.push(Edge {
-                    cost,
-                    destination: cluster.transitions[i],
-                    destination_is_foreign: false,
-                    path: path_rev,
-                });
-            }
-        }
-        return id;
-    }
-
-    fn remove_temp_transition(&mut self, removee_id: TransitionId) {
-        let removee = self.transitions.get(&removee_id).unwrap();
-        let cluster_idx = self.locate_cluster(removee.position);
-        let cluster_transitions = &self.clusters[cluster_idx as usize].transitions;
-        for t_id in cluster_transitions {
-            let t = self.transitions.get_mut(t_id).unwrap();
-            if let Some(pos) = t
-                .edges
-                .iter()
-                .position(|&Edge { destination, .. }| destination == removee_id)
-            {
-                t.edges.remove(pos);
-            }
-        }
-        self.transitions.remove(&removee_id);
     }
 
     fn locate_cluster(&self, p: Coords) -> u32 {
