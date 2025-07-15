@@ -61,6 +61,8 @@ enum TransitionPairOrientation {
 }
 
 struct OverlayGraph {
+    start_pos: Coords,
+    end_pos: Coords,
     start_id: TransitionId,
     end_id: TransitionId,
     entry_edges: Vec<Edge>,
@@ -198,15 +200,15 @@ impl HPAStar {
         astar::h(a, b)
     }
 
-    fn create_overlay_graph(&self, start: Coords, end: Coords) -> OverlayGraph {
-        let start_id = join_transition_id(start, &TransitionOrientation::None);
-        let end_id = join_transition_id(end, &TransitionOrientation::None);
+    pub fn create_overlay_graph(&self, start_pos: Coords, end_pos: Coords) -> OverlayGraph {
+        let start_id = join_transition_id(start_pos, &TransitionOrientation::None);
+        let end_id = join_transition_id(end_pos, &TransitionOrientation::None);
         let mut entry_edges = vec![];
         let mut end_edges = HashMap::new();
 
         // insert entry edges
         {
-            let p = start;
+            let p = start_pos;
             let cluster_idx = self.locate_cluster(p) as usize;
             let cluster_topleft = self.get_cluster_position(cluster_idx as u32);
             let cluster = &self.clusters[cluster_idx];
@@ -236,7 +238,7 @@ impl HPAStar {
 
         // insert end edges
         {
-            let p = end;
+            let p = end_pos;
             let cluster_idx = self.locate_cluster(p) as usize;
             let cluster_topleft = self.get_cluster_position(cluster_idx as u32);
             let cluster = &self.clusters[cluster_idx];
@@ -275,6 +277,8 @@ impl HPAStar {
         }
 
         OverlayGraph {
+            start_pos,
+            end_pos,
             start_id,
             end_id,
             entry_edges,
@@ -282,9 +286,12 @@ impl HPAStar {
         }
     }
 
-    pub fn find_path(&self, start_pos: (u32, u32), end_pos: (u32, u32)) -> Vec<Coords> {
+    pub fn single_path(&self, start_pos: Coords, end_pos: Coords) -> Vec<Coords> {
         let overlay = self.create_overlay_graph(start_pos, end_pos);
+        self.find_path(overlay)
+    }
 
+    fn find_path(&self, overlay: OverlayGraph) -> Vec<Coords> {
         // find the path of transitions
         let mut came_from = HashMap::<TransitionId, (TransitionId, &Edge)>::new();
 
@@ -296,7 +303,7 @@ impl HPAStar {
         let mut open_set = BinaryHeap::<(Reverse<u32>, TransitionId)>::new();
         for edge in &overlay.entry_edges {
             let p = self.transitions.get(&edge.destination).unwrap().position;
-            open_set.push((Reverse(astar::h(p, end_pos)), edge.destination));
+            open_set.push((Reverse(astar::h(p, overlay.end_pos)), edge.destination));
         }
 
         let mut maybe_abstract_path: Option<Vec<&Edge>> = None;
@@ -325,8 +332,8 @@ impl HPAStar {
                         .get(&neighbor_edge.destination)
                         .map(|t| t.position)
                         // end pos is not in self.transitions
-                        .unwrap_or(end_pos);
-                    let neighbor_f_score = tentative_g_score + astar::h(p, end_pos);
+                        .unwrap_or(overlay.end_pos);
+                    let neighbor_f_score = tentative_g_score + astar::h(p, overlay.end_pos);
                     open_set.push((Reverse(neighbor_f_score), neighbor_edge.destination));
                 }
             }
@@ -341,7 +348,7 @@ impl HPAStar {
                 concrete_path.append(&mut clone);
             }
         }
-        concrete_path.push(end_pos);
+        concrete_path.push(overlay.end_pos);
 
         // path smoothing
         let mut smoothed_path = Vec::new();
@@ -959,7 +966,7 @@ mod tests {
 
         let start: Coords = (5, 5);
         let end: Coords = (cluster_size + 5, 5);
-        let hpastar_path = nav.find_path(start, end);
+        let hpastar_path = nav.single_path(start, end);
         /* let astar_path = astar::astar(
             start,
             end,
@@ -1003,7 +1010,7 @@ mod tests {
         );
         let start: (u32, u32) = (8, 8);
         let end: (u32, u32) = (500, 500);
-        let hpastar_path = nav.find_path(start, end);
+        let hpastar_path = nav.single_path(start, end);
 
         test_helpers::draw_grid(
             pathable,
@@ -1030,7 +1037,7 @@ mod tests {
         );
         let start: (u32, u32) = (20, 16);
         let end: (u32, u32) = (132, 507);
-        let hpastar_path = nav.find_path(start, end);
+        let hpastar_path = nav.single_path(start, end);
         test_helpers::draw_grid(
             pathable,
             hpastar_path,
@@ -1067,7 +1074,7 @@ mod tests {
         );
         let start: (u32, u32) = (20, 16);
         let end: (u32, u32) = (132, 507);
-        let hpastar_path = nav.find_path(start, end);
+        let hpastar_path = nav.single_path(start, end);
         //let hpastar_path = vec![];
         test_helpers::draw_grid(
             nav.navigability_mask.to_row_major_vec(),
