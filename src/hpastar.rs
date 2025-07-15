@@ -2,11 +2,10 @@ use crate::astar;
 use crate::astar::astar;
 use crate::navigability_mask::Coords;
 use crate::navigability_mask::NavigabilityMask;
-use std::iter;
 use std::u32;
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BTreeMap, BinaryHeap},
 };
 
 type TransitionId = u64;
@@ -66,13 +65,13 @@ struct OverlayGraph {
     start_id: TransitionId,
     end_id: TransitionId,
     entry_edges: Vec<Edge>,
-    end_edges: HashMap<TransitionId, Edge>,
+    end_edges: BTreeMap<TransitionId, Edge>,
 }
 
 pub struct HPAStar {
     navigability_mask: NavigabilityMask,
     clusters: Vec<Cluster>, // row-major order
-    transitions: HashMap<TransitionId, Transition>,
+    transitions: BTreeMap<TransitionId, Transition>,
     width: u32,
     cluster_size: u32,
     entrance_width_breakpoint: u32,
@@ -154,7 +153,7 @@ impl HPAStar {
             cluster_size,
             entrance_width_breakpoint,
             clusters: Vec::new(),
-            transitions: HashMap::new(),
+            transitions: BTreeMap::new(),
             width,
         };
 
@@ -183,7 +182,7 @@ impl HPAStar {
     // [nth edge, n-1th edge, .., 1st edge]
     fn reconstruct_path<'a>(
         &self,
-        came_from: &HashMap<TransitionId, (TransitionId, &'a Edge)>,
+        came_from: &BTreeMap<TransitionId, (TransitionId, &'a Edge)>,
         mut current: TransitionId,
     ) -> Vec<&'a Edge> {
         let mut total_path = vec![];
@@ -204,7 +203,7 @@ impl HPAStar {
         let start_id = join_transition_id(start_pos, &TransitionOrientation::None);
         let end_id = join_transition_id(end_pos, &TransitionOrientation::None);
         let mut entry_edges = vec![];
-        let mut end_edges = HashMap::new();
+        let mut end_edges = BTreeMap::new();
 
         // insert entry edges
         {
@@ -293,9 +292,9 @@ impl HPAStar {
 
     fn find_path(&self, overlay: OverlayGraph) -> Vec<Coords> {
         // find the path of transitions
-        let mut came_from = HashMap::<TransitionId, (TransitionId, &Edge)>::new();
+        let mut came_from = BTreeMap::<TransitionId, (TransitionId, &Edge)>::new();
 
-        let mut g_score = HashMap::<TransitionId, u32>::new();
+        let mut g_score = BTreeMap::<TransitionId, u32>::new();
         for edge in &overlay.entry_edges {
             g_score.insert(edge.destination, edge.cost);
         }
@@ -384,14 +383,10 @@ impl HPAStar {
         let max_y = pos.1 + self.cluster_size - 1;
         for i in 0..cluster.transitions.len() {
             for j in (i + 1)..cluster.transitions.len() {
-                let [t1, t2] = {
-                    let [maybe_t1, maybe_t2] = self
-                        .transitions
-                        .get_disjoint_mut([&cluster.transitions[i], &cluster.transitions[j]]);
-                    [maybe_t1.unwrap(), maybe_t2.unwrap()]
-                };
-                let start = t1.position;
-                let goal = t2.position;
+                let t1_id = cluster.transitions[i];
+                let t2_id = cluster.transitions[j];
+                let start = self.transitions.get(&t1_id).unwrap().position;
+                let goal = self.transitions.get(&t2_id).unwrap().position;
                 let maybe_path = astar(
                     start,
                     goal,
@@ -405,13 +400,13 @@ impl HPAStar {
                     let mut path_rev = path.0.clone();
                     let cost = path.1;
                     path_rev.reverse();
-                    t1.edges.push(Edge {
+                    self.transitions.get_mut(&t1_id).unwrap().edges.push(Edge {
                         cost,
                         destination: cluster.transitions[j],
                         destination_is_foreign: false,
                         path: path.0,
                     });
-                    t2.edges.push(Edge {
+                    self.transitions.get_mut(&t2_id).unwrap().edges.push(Edge {
                         cost,
                         destination: cluster.transitions[i],
                         destination_is_foreign: false,

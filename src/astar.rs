@@ -1,13 +1,13 @@
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BTreeMap, BinaryHeap},
     u32,
 };
 
-use crate::navigability_mask::{self, Coords, NavigabilityMask};
+use crate::navigability_mask::{Coords, NavigabilityMask};
 
 // includes both start and destination elements
-fn reconstruct_path(came_from: &HashMap<Coords, Coords>, mut current: Coords) -> Vec<Coords> {
+fn reconstruct_path(came_from: &BTreeMap<Coords, Coords>, mut current: Coords) -> Vec<Coords> {
     let mut total_path = vec![current];
     while let Some(&prev) = came_from.get(&current) {
         current = prev;
@@ -39,9 +39,9 @@ pub fn astar(
     min_y: u32,
     max_y: u32,
 ) -> Option<(Vec<Coords>, u32)> {
-    let mut came_from = HashMap::<Coords, Coords>::new();
+    let mut came_from = BTreeMap::<Coords, Coords>::new();
 
-    let mut g_score = HashMap::<Coords, u32>::new();
+    let mut g_score = BTreeMap::<Coords, u32>::new();
     g_score.insert(start, 0u32);
 
     let mut open_set = BinaryHeap::<(Reverse<u32>, Coords)>::new();
